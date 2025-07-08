@@ -93,23 +93,26 @@ if ticker:
 
     income_df = fetch_income_statement(ticker, period=interval.lower())
     if not income_df.empty:
-        chart_df = income_df[["date", "revenue", "netIncome"]].melt(
-            id_vars="date",
-            var_name="Metric",
-            value_name="Amount"
-        )
+        chart_df = income_df[["date", "revenue", "netIncome"]].copy()
+        chart_df = chart_df.melt(id_vars="date", var_name="Metric", value_name="Amount")
+        chart_df["date"] = pd.to_datetime(chart_df["date"])
 
         base = alt.Chart(chart_df).encode(
-            x=alt.X('yearmonth(date):T', title='Date'),
+            x=alt.X('yearmonth(date):T', title='Date', axis=alt.Axis(labelAngle=-45)),
             y=alt.Y('Amount:Q', title='USD'),
             color=alt.Color('Metric:N', scale=alt.Scale(scheme='tableau10')),
-            tooltip=["date:T", "Metric:N", "Amount:Q"]
+            tooltip=[
+                alt.Tooltip("Metric:N"),
+                alt.Tooltip("date:T"),
+                alt.Tooltip("Amount:Q", format=",.0f")
+            ]
         )
 
-        bar = base.mark_bar()
-        line = base.mark_line(point=True)
+        bars = base.mark_bar()
+        lines = base.mark_line(point=True)
 
-        st.altair_chart((bar + line).properties(width='container', height=400).configure_axisX(labelAngle=-45), use_container_width=True)
+        chart = (bars + lines).properties(width='container', height=400)
+        st.altair_chart(chart, use_container_width=True)
 
         # --- YoY Growth Table (Annual only, transposed) ---
         if interval == "Annual":
@@ -118,8 +121,6 @@ if ticker:
             yoy_df["Net Income YoY %"] = yoy_df["netIncome"].pct_change() * 100
             yoy_df["Year"] = yoy_df["date"].dt.year
             display_df = yoy_df[["Year", "Revenue YoY %", "Net Income YoY %"]].dropna()
-
-            # Transpose
             table = display_df.set_index("Year").T
             st.markdown("### YoY Growth (Revenue & Net Income)")
             st.dataframe(table.style.format("{:.2f}%"), use_container_width=True)
