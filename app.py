@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import altair as alt
 
 # --- Config ---
 API_KEY = st.secrets["fmp"]["api_key"]
@@ -17,14 +18,22 @@ def fetch_fundamentals(ticker: str) -> pd.DataFrame:
     if not data:
         return pd.DataFrame()
     latest = data[0]
-    metrics = {
+    base_metrics = {
         "PE Ratio (TTM)": latest.get("priceEarningsRatioTTM"),
         "PEG Ratio": latest.get("priceEarningsToGrowthRatioTTM"),
         "ROE": latest.get("returnOnEquityTTM"),
         "Current Ratio": latest.get("currentRatioTTM"),
         "Debt/Equity": latest.get("debtEquityRatioTTM"),
     }
-    return pd.DataFrame.from_dict(metrics, orient="index", columns=["Value"])
+    extra_metrics = {
+        "P/B Ratio": latest.get("priceToBookRatioTTM"),
+        "ROA": latest.get("returnOnAssetsTTM"),
+        "Gross Margin": latest.get("grossProfitMarginTTM"),
+        "Operating Margin": latest.get("operatingProfitMarginTTM"),
+        "Net Margin": latest.get("netProfitMarginTTM"),
+        "Interest Coverage": latest.get("interestCoverageTTM")
+    }
+    return pd.DataFrame.from_dict(base_metrics, orient="index", columns=["Value"]), pd.DataFrame.from_dict(extra_metrics, orient="index", columns=["Value"])
 
 @st.cache_data(ttl=3600)
 def fetch_profile(ticker: str) -> dict:
@@ -55,13 +64,13 @@ ticker = st.text_input("Enter a ticker symbol", value="AAPL").strip().upper()
 if ticker:
     with st.spinner(f"Loading data for {ticker}…"):
         profile = fetch_profile(ticker)
-        metrics = fetch_fundamentals(ticker)
+        base_ratios, extra_ratios = fetch_fundamentals(ticker)
 
     if not profile:
         st.error(f"No data found for ticker `{ticker}`.")
         st.stop()
 
-    # Display profile info
+    # --- Company Profile ---
     st.subheader(f"{profile.get('companyName')} ({ticker})")
     cols = st.columns(3)
     cols[0].metric("Sector", profile.get("sector", "–"))
@@ -70,21 +79,53 @@ if ticker:
     formatted_cap = f"${mktcap:,}" if mktcap else "–"
     cols[2].metric("Market Cap", formatted_cap)
 
-    # Display ratios
+    # --- Key Ratios ---
     st.markdown("### Key Ratios (TTM)")
-    st.table(metrics.style.format("{:.2f}"))
+    st.table(base_ratios.style.format("{:.2f}"))
 
-    # Revenue & Net Income Chart
+    # --- Expanded Metrics ---
+    st.markdown("### Profitability & Valuation Metrics")
+    st.table(extra_ratios.style.format("{:.2f}"))
+
+    # --- Income Statement Chart ---
     st.markdown("### Revenue & Net Income")
     interval = st.radio("Select time interval", ["Annual", "Quarterly"], horizontal=True)
 
     income_df = fetch_income_statement(ticker, period=interval.lower())
     if not income_df.empty:
-        chart_data = income_df[["date", "revenue", "netIncome"]].set_index("date")
-        st.line_chart(chart_data.rename(columns={
-            "revenue": "Revenue",
-            "netIncome": "Net Income"
-        }))
+        chart_df = income_df[["date", "revenue", "netIncome"]].melt(
+            id_vars="date",
+            var_name="Metric",
+            value_name="Amount"
+        )
+
+        bar_chart = alt.Chart(chart_df).mark_bar().encode(
+            x=alt.X('yearmonth(date):T', title='Date'),
+            y=alt.Y('Amount:Q', title='USD'),
+            color=alt.Color('Metric:N', scale=alt.Scale(scheme='tableau10')),
+            tooltip=["date:T", "Metric:N", "Amount:Q"]
+        ).properties(
+            width='container',
+            height=400
+        ).configure_axisX(
+            labelAngle=-45
+        )
+
+        st.altair_chart(bar_chart, use_container_width=True)
+
+        # --- YoY Growth Table (Annual only) ---
+        if interval == "Annual":
+            yoy_df = income_df[["date", "revenue", "netIncome"]].copy()
+            yoy_df["Revenue YoY %"] = yoy_df["revenue"].pct_change() * 100
+            yoy_df["Net Income YoY %"] = yoy_df["netIncome"].pct_change() * 100
+            yoy_df["Year"] = yoy_df["date"].dt.year
+            growth_display = yoy_df[["Year", "Revenue YoY %", "Net Income YoY %"]].dropna()
+
+            st.markdown("### YoY Growth (Revenue & Net Income)")
+            st.dataframe(
+                growth_display.set_index("Year").style.format("{:.2f}%"),
+                use_container_width=True
+            )
     else:
         st.warning("No income statement data available.")
 
