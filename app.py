@@ -99,33 +99,30 @@ if ticker:
             value_name="Amount"
         )
 
-        bar_chart = alt.Chart(chart_df).mark_bar().encode(
+        base = alt.Chart(chart_df).encode(
             x=alt.X('yearmonth(date):T', title='Date'),
             y=alt.Y('Amount:Q', title='USD'),
             color=alt.Color('Metric:N', scale=alt.Scale(scheme='tableau10')),
             tooltip=["date:T", "Metric:N", "Amount:Q"]
-        ).properties(
-            width='container',
-            height=400
-        ).configure_axisX(
-            labelAngle=-45
         )
 
-        st.altair_chart(bar_chart, use_container_width=True)
+        bar = base.mark_bar()
+        line = base.mark_line(point=True)
 
-        # --- YoY Growth Table (Annual only) ---
+        st.altair_chart((bar + line).properties(width='container', height=400).configure_axisX(labelAngle=-45), use_container_width=True)
+
+        # --- YoY Growth Table (Annual only, transposed) ---
         if interval == "Annual":
             yoy_df = income_df[["date", "revenue", "netIncome"]].copy()
             yoy_df["Revenue YoY %"] = yoy_df["revenue"].pct_change() * 100
             yoy_df["Net Income YoY %"] = yoy_df["netIncome"].pct_change() * 100
             yoy_df["Year"] = yoy_df["date"].dt.year
-            growth_display = yoy_df[["Year", "Revenue YoY %", "Net Income YoY %"]].dropna()
+            display_df = yoy_df[["Year", "Revenue YoY %", "Net Income YoY %"]].dropna()
 
+            # Transpose
+            table = display_df.set_index("Year").T
             st.markdown("### YoY Growth (Revenue & Net Income)")
-            st.dataframe(
-                growth_display.set_index("Year").style.format("{:.2f}%"),
-                use_container_width=True
-            )
+            st.dataframe(table.style.format("{:.2f}%"), use_container_width=True)
     else:
         st.warning("No income statement data available.")
 
