@@ -108,18 +108,13 @@ if ticker:
                 alt.Tooltip("date:T"),
                 alt.Tooltip("Amount:Q", format=",.0f")
             ]
-        ) + alt.Chart(chart_df).mark_line(point=True).encode(
-            x='yearmonth(date):T',
-            y='Amount:Q',
-            color='Metric:N',
-            detail='Metric:N'
-        )
+        ).properties(width='container', height=400)
 
-        st.altair_chart(chart.properties(width='container', height=400), use_container_width=True)
+        st.altair_chart(chart, use_container_width=True)
     else:
         st.warning("No income statement data available.")
 
-    # --- YoY Growth Table (Always show, using annual data) ---
+    # --- YoY Growth Table (Always visible, based on annual data) ---
     if not income_annual.empty:
         yoy_df = income_annual[["date", "revenue", "netIncome"]].copy()
         yoy_df["Revenue YoY %"] = yoy_df["revenue"].pct_change() * 100
@@ -131,4 +126,5 @@ if ticker:
         st.dataframe(table.style.format("{:.2f}%"), use_container_width=True)
 
     st.caption("Data via Financial Modeling Prep — https://financialmodelingprep.com")
+
 
