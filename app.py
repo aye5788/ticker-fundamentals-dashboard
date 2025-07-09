@@ -1,113 +1,117 @@
 import streamlit as st
-import pandas as pd
 import requests
-import altair as alt
-from datetime import datetime
+import pandas as pd
 
-# Title
-st.set_page_config(layout="wide")
-st.title("📊 Fundamentals Dashboard")
-
-# Input
-symbol = st.text_input("Enter Stock Ticker (e.g., AAPL):", "AAPL").upper()
+# Load API key from Streamlit secrets
 api_key = st.secrets["fmp"]["api_key"]
 
-# Helper function to fetch from FMP API
-def fetch_data(endpoint):
-    url = f"https://financialmodelingprep.com/api/v3/{endpoint}?apikey={api_key}"
-    response = requests.get(url)
-    return response.json() if response.status_code == 200 else {}
+# Utility functions for FMP endpoints
+def get_json(url):
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except:
+        return None
 
-# --- Revenue & Net Income YoY ---
-st.subheader("📈 YoY Growth (Revenue & Net Income)")
-income_data = fetch_data(f"income-statement/{symbol}?limit=12&datatype=json")
+# Load Ticker Input
+st.set_page_config(page_title="Fundamentals Dashboard")
+st.title("📊 Fundamentals Dashboard")
+ticker = st.text_input("Enter Stock Ticker (e.g., AAPL):", value="AAPL")
 
-if income_data:
-    df_income = pd.DataFrame(income_data)
-    df_income["date"] = pd.to_datetime(df_income["date"])
-    df_income = df_income.sort_values("date")
+if ticker:
+    # --- Income Statement for YoY Growth ---
+    income_url = f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}?limit=10&apikey={api_key}"
+    income_data = get_json(income_url)
+    if income_data:
+        income_df = pd.DataFrame(income_data)
+        income_df["date"] = pd.to_datetime(income_df["date"])
+        income_df = income_df.sort_values("date")
+        income_df["Revenue YoY %"] = income_df["revenue"].pct_change() * 100
+        income_df["Net Income YoY %"] = income_df["netIncome"].pct_change() * 100
+        yoy_df = income_df[["date", "Revenue YoY %", "Net Income YoY %"]].dropna().copy()
 
-    df_income["Revenue YoY %"] = df_income["revenue"].pct_change() * 100
-    df_income["Net Income YoY %"] = df_income["netIncome"].pct_change() * 100
-    yoy_df = df_income[["date", "Revenue YoY %", "Net Income YoY %"]].dropna()
-    yoy_df["Year"] = yoy_df["date"].dt.year
-
-    yoy_pivot = yoy_df.pivot_table(index="Year", values=["Revenue YoY %", "Net Income YoY %"])
-    st.dataframe(yoy_pivot.style.format("{:.2f}%"), use_container_width=True)
-else:
-    st.warning("No income statement data found.")
-
-# --- Earnings & Cash Flow Metrics ---
-st.subheader("🧾 Earnings & Cash Flow")
-quote_data = fetch_data(f"quote/{symbol}")
-fcf_data = fetch_data(f"cash-flow-statement/{symbol}?limit=1")
-dividend_data = fetch_data(f"profile/{symbol}")
-
-try:
-    eps = quote_data[0].get("eps")
-except: eps = "N/A"
-try:
-    fcf = fcf_data[0].get("freeCashFlow")
-except: fcf = "N/A"
-try:
-    dividend_yield = dividend_data[0].get("lastDiv") / quote_data[0].get("price")
-except: dividend_yield = "N/A"
-
-st.dataframe(pd.DataFrame({
-    "Metric": ["EPS (TTM)", "Free Cash Flow (TTM)", "Dividend Yield"],
-    "Value": [eps, fcf, f"{dividend_yield:.2%}" if isinstance(dividend_yield, float) else "N/A"]
-}))
-
-# --- Sector P/E Comparison ---
-st.subheader("💡 Sector P/E Comparison")
-profile = fetch_data(f"profile/{symbol}")
-sector = profile[0].get("sector") if profile else None
-sector_pe_data = fetch_data("sector_price_earning_ratio")
-
-if sector and sector_pe_data:
-    match = next((item for item in sector_pe_data if item["sector"] == sector), None)
-    if match:
-        sector_pe = match["pe"]
-        st.markdown(f"**Sector:** {sector}  |  **P/E:** {sector_pe:.2f}")
+        st.subheader("📈 YoY Growth (Revenue & Net Income)")
+        st.dataframe(yoy_df.set_index("date").T.style.format("{:.2f}%"))
     else:
-        st.info(f"No sector P/E found for {sector}")
-else:
-    st.warning("Unable to retrieve sector information.")
+        st.warning("No income statement data found.")
 
-# --- Valuation Metrics ---
-st.subheader("📌 Key Ratios (TTM)")
-ratios_ttm = fetch_data(f"ratios-ttm/{symbol}")
+    # --- Earnings & Cash Flow ---
+    st.subheader("💰 Earnings & Cash Flow")
+    eps_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={api_key}"
+    eps_data = get_json(eps_url)
+    eps_val = eps_data[0].get("epsTTM") if eps_data else None
 
-if ratios_ttm:
-    ttm_df = pd.DataFrame(ratios_ttm)
-    ttm_metrics = [
-        "peRatioTTM", "pegRatioTTM", "returnOnEquityTTM", "currentRatioTTM", "debtEquityRatioTTM"
-    ]
-    ttm_labels = [
-        "PE Ratio (TTM)", "PEG Ratio", "ROE", "Current Ratio", "Debt/Equity"
-    ]
-    values = [ttm_df[col].iloc[0] if col in ttm_df else "N/A" for col in ttm_metrics]
-    st.dataframe(pd.DataFrame({"Metric": ttm_labels, "Value": values}))
+    quote_url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}"
+    quote_data = get_json(quote_url)
+    div_yield = quote_data[0].get("dividendYield") if quote_data else None
 
-# --- Profitability & Valuation ---
-st.subheader("📌 Profitability & Valuation Metrics")
-ratios_data = fetch_data(f"ratios/{symbol}?limit=1")
+    earnings_table = pd.DataFrame({
+        "Metric": ["EPS (TTM)", "Free Cash Flow (TTM)", "Dividend Yield"],
+        "Value": [
+            round(eps_val, 2) if eps_val else "N/A",
+            "N/A",  # Free cash flow TTM not directly available
+            f"{div_yield*100:.2f}%" if div_yield else "N/A"
+        ]
+    })
+    st.table(earnings_table)
 
-if ratios_data:
-    data = ratios_data[0]
-    metrics = [
-        ("P/B Ratio", data.get("priceToBookRatio")),
-        ("ROA", data.get("returnOnAssets")),
-        ("Gross Margin", data.get("grossProfitMargin")),
-        ("Operating Margin", data.get("operatingProfitMargin")),
-        ("Net Margin", data.get("netProfitMargin")),
-        ("Interest Coverage", data.get("interestCoverage"))
-    ]
-    df_ratios = pd.DataFrame(metrics, columns=["Metric", "Value"])
-    st.dataframe(df_ratios)
+    # --- Sector P/E Comparison ---
+    st.subheader("💡 Sector P/E Comparison")
+    profile_url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={api_key}"
+    profile_data = get_json(profile_url)
+    sector = profile_data[0].get("sector") if profile_data else None
+
+    if sector:
+        sector_url = f"https://financialmodelingprep.com/api/v4/sector_pe_ratio?apikey={api_key}"
+        sector_data = get_json(sector_url)
+        if sector_data and sector in sector_data:
+            pe_sector = sector_data[sector]["pe"]
+            st.info(f"Sector P/E (for {sector}): {round(pe_sector, 2)}")
+        else:
+            st.warning(f"No sector P/E found for {sector}")
+    else:
+        st.warning("Unable to retrieve sector information.")
+
+    # --- Key Ratios ---
+    st.subheader("📌 Key Ratios (TTM)")
+    if eps_data:
+        ttm_table = pd.DataFrame({
+            "Metric": [
+                "PE Ratio (TTM)", "PEG Ratio", "ROE", "Current Ratio", "Debt/Equity"
+            ],
+            "Value": [
+                eps_data[0].get("peRatioTTM", "N/A"),
+                eps_data[0].get("pegRatioTTM", "N/A"),
+                eps_data[0].get("returnOnEquityTTM", "N/A"),
+                eps_data[0].get("currentRatioTTM", "N/A"),
+                eps_data[0].get("debtEquityRatioTTM", "N/A")
+            ]
+        })
+        st.dataframe(ttm_table)
+
+    # --- Profitability & Valuation Metrics ---
+    st.subheader("📌 Profitability & Valuation Metrics")
+    if eps_data:
+        prof_table = pd.DataFrame({
+            "Metric": ["P/B Ratio", "ROA", "Gross Margin", "Operating Margin", "Net Margin", "Interest Coverage"],
+            "Value": [
+                eps_data[0].get("priceToBookRatioTTM", "N/A"),
+                eps_data[0].get("returnOnAssetsTTM", "N/A"),
+                eps_data[0].get("grossProfitMarginTTM", "N/A"),
+                eps_data[0].get("operatingProfitMarginTTM", "N/A"),
+                eps_data[0].get("netProfitMarginTTM", "N/A"),
+                eps_data[0].get("interestCoverageTTM", "N/A")
+            ]
+        })
+        st.dataframe(prof_table)
 
 st.markdown("""
-    <br><sub>Data via Financial Modeling Prep — [https://financialmodelingprep.com](https://financialmodelingprep.com)</sub>
+    <br>
+    <div style='text-align:center; font-size: small;'>
+        Data via Financial Modeling Prep — <a href="https://financialmodelingprep.com">https://financialmodelingprep.com</a>
+    </div>
 """, unsafe_allow_html=True)
-
 
