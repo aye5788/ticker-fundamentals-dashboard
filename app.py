@@ -1,138 +1,109 @@
 import streamlit as st
-import pandas as pd
 import requests
-import altair as alt
-import datetime
+import pandas as pd
+import plotly.express as px
+from datetime import date
 
-API_KEY = st.secrets["fmp"]["api_key"]
-BASE_URL = "https://financialmodelingprep.com/api/v3"
+st.set_page_config(layout="wide")
+FMP_API_KEY = st.secrets["fmp_api_key"]
 
-@st.cache_data(ttl=3600)
-def fetch_profile(ticker):
-    url = f"{BASE_URL}/profile/{ticker}?apikey={API_KEY}"
+# User input
+ticker = st.text_input("Enter stock ticker", value="AAPL").upper()
+
+@st.cache_data
+def get_company_profile(ticker):
+    url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={FMP_API_KEY}"
     return requests.get(url).json()[0]
 
-@st.cache_data(ttl=3600)
-def fetch_ratios_ttm(ticker):
-    url = f"{BASE_URL}/ratios-ttm/{ticker}?apikey={API_KEY}"
+@st.cache_data
+def get_income_statement(ticker, period="annual"):
+    url = f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}?period={period}&apikey={FMP_API_KEY}"
+    return requests.get(url).json()
+
+@st.cache_data
+def get_key_metrics(ticker):
+    url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={FMP_API_KEY}"
     return requests.get(url).json()[0]
 
-@st.cache_data(ttl=3600)
-def fetch_key_metrics_ttm(ticker):
-    url = f"{BASE_URL}/key-metrics-ttm/{ticker}?apikey={API_KEY}"
+@st.cache_data
+def get_ratios_ttm(ticker):
+    url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
     return requests.get(url).json()[0]
 
-@st.cache_data(ttl=3600)
-def fetch_income_statement(ticker, period="annual"):
-    url = f"{BASE_URL}/income-statement/{ticker}?period={'quarter' if period=='quarterly' else 'annual'}&limit=12&apikey={API_KEY}"
-    df = pd.DataFrame(requests.get(url).json())
-    if df.empty: return df
-    df["date"] = pd.to_datetime(df["date"])
-    return df.sort_values("date")
+@st.cache_data
+def get_sector_pe_snapshot():
+    url = f"https://financialmodelingprep.com/api/v3/sector_price_earning_ratio?apikey={FMP_API_KEY}"
+    return requests.get(url).json()
 
-@st.cache_data(ttl=86400)
-def fetch_sector_pe_snapshot():
-    for i in range(10):
-        date = (datetime.datetime.today() - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-        url = f"{BASE_URL}/sector-pe-snapshot?date={date}&apikey={API_KEY}"
-        res = requests.get(url)
-        if res.status_code == 200 and res.json():
-            return res.json()
-    return []
+# Load data
+profile = get_company_profile(ticker)
+income_annual = get_income_statement(ticker, "annual")
+income_quarterly = get_income_statement(ticker, "quarter")
+metrics = get_key_metrics(ticker)
+ratios = get_ratios_ttm(ticker)
+sector_pe_data = get_sector_pe_snapshot()
 
-# --- UI ---
-st.set_page_config(page_title="Fundamentals Dashboard", layout="wide")
-st.title("📊 Fundamentals Dashboard")
+# Header
+st.title(f"{profile['companyName']} ({ticker}) Fundamentals")
 
-ticker = st.text_input("Enter a ticker", "AAPL").strip().upper()
+# Revenue & Net Income chart
+st.subheader("Revenue & Net Income")
+interval = st.radio("Select time interval", ("Annual", "Quarterly"))
+income = income_annual if interval == "Annual" else income_quarterly
+df = pd.DataFrame(income)
+df["date"] = pd.to_datetime(df["date"])
+df = df.sort_values("date")
 
-if ticker:
-    with st.spinner("Loading..."):
-        profile = fetch_profile(ticker)
-        ratios = fetch_ratios_ttm(ticker)
-        key_metrics = fetch_key_metrics_ttm(ticker)
-        income_annual = fetch_income_statement(ticker, "annual")
-        income_quarterly = fetch_income_statement(ticker, "quarterly")
-        sector_pe_data = fetch_sector_pe_snapshot()
+fig = px.bar(df, x="date", y=["revenue", "netIncome"], barmode="group", labels={"value": "USD", "date": "Date", "variable": "Metric"})
+st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader(f"{profile.get('companyName')} ({ticker})")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Sector", profile.get("sector", "–"))
-    c2.metric("Industry", profile.get("industry", "–"))
-    cap = profile.get("mktCap")
-    c3.metric("Market Cap", f"${cap:,.0f}" if cap else "–")
+# YoY Growth
+st.subheader("📊 YoY Growth (Revenue & Net Income)")
+df["Revenue YoY %"] = df["revenue"].pct_change().mul(100).round(2)
+df["Net Income YoY %"] = df["netIncome"].pct_change().mul(100).round(2)
+growth_df = df[["date", "Revenue YoY %", "Net Income YoY %"]].copy()
+growth_df["date"] = pd.to_datetime(growth_df["date"]).dt.year
+st.dataframe(growth_df.set_index("date").T.style.format("{:.2f}%"))
 
-    st.markdown("### 🔑 Key Ratios")
-    basic = {
-        "PE Ratio": ratios.get("priceEarningsRatioTTM"),
-        "PEG Ratio": ratios.get("priceEarningsToGrowthRatioTTM"),
-        "ROE": ratios.get("returnOnEquityTTM"),
-        "Current Ratio": ratios.get("currentRatioTTM"),
-        "Debt/Equity": ratios.get("debtEquityRatioTTM"),
-    }
-    st.table(pd.DataFrame.from_dict(basic, orient="index", columns=["Value"]).style.format("{:.2f}"))
+# Earnings & Cash Flow
+st.subheader("🧾 Earnings & Cash Flow")
+earnings_data = {
+    "EPS (TTM)": metrics.get("epsTTM", "N/A"),
+    "Free Cash Flow (TTM)": metrics.get("freeCashFlowTTM", "N/A"),
+    "Dividend Yield": metrics.get("dividendYieldTTM", "N/A")
+}
+st.table(pd.DataFrame(earnings_data.items(), columns=["", "Value"]))
 
-    st.markdown("### 📈 Profitability & Valuation")
-    prof_data = {
-        "P/B Ratio": ratios.get("priceToBookRatioTTM"),
-        "ROA": ratios.get("returnOnAssetsTTM"),
-        "Gross Margin": ratios.get("grossProfitMarginTTM"),
-        "Operating Margin": ratios.get("operatingProfitMarginTTM"),
-        "Net Margin": ratios.get("netProfitMarginTTM"),
-        "Interest Coverage": ratios.get("interestCoverageTTM"),
-    }
-    st.table(pd.DataFrame.from_dict(prof_data, orient="index", columns=["Value"]).style.format("{:.2f}"))
+# Sector P/E comparison
+st.subheader("💡 Sector P/E Comparison")
+sector = profile.get("sector")
+sector_pe = next((s for s in sector_pe_data if s.get("sector") == sector), None)
 
-    st.markdown("### 📊 Revenue & Net Income")
-    interval = st.radio("Interval", ["Annual", "Quarterly"], horizontal=True)
-    df = income_annual if interval == "Annual" else income_quarterly
-    if not df.empty:
-        chart_df = df[["date", "revenue", "netIncome"]].melt(id_vars="date", var_name="Metric", value_name="Amount")
-        chart = alt.Chart(chart_df).mark_bar().encode(
-            x=alt.X("yearmonth(date):T", title="Date"),
-            xOffset="Metric",
-            y=alt.Y("Amount:Q", title="USD"),
-            color="Metric:N",
-            tooltip=["Metric", "date:T", alt.Tooltip("Amount:Q", format=",.0f")]
-        ).properties(height=400)
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.warning("No income data available.")
+if sector_pe:
+    st.success(f"Sector: {sector} — P/E Ratio: {sector_pe.get('pe'):.2f}")
+else:
+    st.info(f"No sector P/E found for {sector}")
 
-    st.markdown("### 🔁 YoY Growth (Revenue & Net Income)")
-    if not income_annual.empty:
-        y = income_annual.copy()
-        y["Year"] = y["date"].dt.year
-        y["Revenue YoY %"] = y["revenue"].pct_change() * 100
-        y["Net Income YoY %"] = y["netIncome"].pct_change() * 100
-        ydf = y[["Year", "Revenue YoY %", "Net Income YoY %"]].dropna().set_index("Year").T
-        st.dataframe(ydf.style.format("{:.2f}%"), use_container_width=True)
+# Key Ratios
+st.subheader("Key Ratios (TTM)")
+key_ratio_data = {
+    "PE Ratio (TTM)": metrics.get("peRatioTTM", "N/A"),
+    "PEG Ratio": metrics.get("pegRatioTTM", "N/A"),
+    "ROE": metrics.get("roeTTM", "N/A"),
+    "Current Ratio": metrics.get("currentRatioTTM", "N/A"),
+    "Debt/Equity": metrics.get("debtEquityRatioTTM", "N/A"),
+}
+st.table(pd.DataFrame(key_ratio_data.items(), columns=["", "Value"]))
 
-    st.markdown("### 🧾 Earnings & Cash Flow")
-    eps = key_metrics.get("epsTTM")
-    fcf = key_metrics.get("freeCashFlowTTM")
-    div = profile.get("lastDiv")
-    price = profile.get("price")
-    dy = (div / price * 100) if div and price else None
-    clean = {
-        "EPS (TTM)": f"{eps:.2f}" if eps else "N/A",
-        "Free Cash Flow (TTM)": f"${fcf:,.0f}" if fcf else "N/A",
-        "Dividend Yield": f"{dy:.2f}%" if dy else "N/A"
-    }
-    st.table(pd.DataFrame.from_dict(clean, orient="index", columns=["Value"]))
-
-    st.markdown("### 🏷️ Sector P/E Comparison")
-    sector = profile.get("sector")
-    match = next((s for s in sector_pe_data if s.get("sector") == sector), None)
-    if match:
-        sector_pe = match.get("pe")
-        company_pe = ratios.get("priceEarningsRatioTTM")
-        st.table(pd.DataFrame({
-            "Company P/E": [company_pe],
-            f"{sector} Sector Avg P/E": [sector_pe]
-        }).T.rename(columns={0: "Value"}).style.format("{:.2f}"))
-    else:
-        st.info(f"No sector P/E found for {sector}")
-
-    st.caption("Data via Financial Modeling Prep — https://financialmodelingprep.com")
+# Profitability
+st.subheader("Profitability & Valuation Metrics")
+prof_data = {
+    "P/B Ratio": metrics.get("pbRatioTTM", "N/A"),
+    "ROA": metrics.get("roaTTM", "N/A"),
+    "Gross Margin": ratios.get("grossProfitMarginTTM", "N/A"),
+    "Operating Margin": ratios.get("operatingProfitMarginTTM", "N/A"),
+    "Net Margin": ratios.get("netProfitMarginTTM", "N/A"),
+    "Interest Coverage": ratios.get("interestCoverageTTM", "N/A"),
+}
+st.table(pd.DataFrame(prof_data.items(), columns=["", "Value"]))
 
